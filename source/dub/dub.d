@@ -19,6 +19,7 @@ import dub.package_;
 import dub.packagemanager;
 import dub.packagesuppliers;
 import dub.project;
+import dub.suppliers.io;
 import dub.generators.generator;
 import dub.init;
 
@@ -27,7 +28,6 @@ import std.array : array, replace;
 import std.conv : to;
 import std.exception : enforce;
 import std.file;
-import std.process : environment;
 import std.range : assumeSorted, empty;
 import std.string;
 import std.encoding : sanitize;
@@ -124,6 +124,7 @@ class Dub {
 		bool m_dryRun = false;
 		PackageManager m_packageManager;
 		PackageSupplier[] m_packageSuppliers;
+		IOSupplier m_ioSupplier;
 		NativePath m_rootPath;
 		SpecialDirs m_dirs;
 		DubConfig m_config;
@@ -159,10 +160,20 @@ class Dub {
 	this(string root_path = ".", PackageSupplier[] additional_package_suppliers = null,
 			SkipPackageSuppliers skip_registry = SkipPackageSuppliers.none)
 	{
-		m_rootPath = NativePath(root_path);
-		if (!m_rootPath.absolute) m_rootPath = NativePath(getcwd()) ~ m_rootPath;
+		version (unittest)
+			auto iosup = new TestIOSupplier();
+		else
+			auto iosup = new FSIOSupplier();
+		this(iosup, additional_package_suppliers, skip_registry);
+	}
 
-		init(m_rootPath);
+    /// Ditto
+    this(IOSupplier ioSupplier, PackageSupplier[] additional_package_suppliers = null,
+			SkipPackageSuppliers skip_registry = SkipPackageSuppliers.none)
+    {
+        this.m_ioSupplier = ioSupplier;
+
+		init(this.m_ioSupplier.rootPath);
 
 		m_packageSuppliers = getPackageSuppliers(additional_package_suppliers, skip_registry);
 		m_packageManager = new PackageManager(m_rootPath, m_dirs.localRepository, m_dirs.systemSettings);
@@ -174,17 +185,26 @@ class Dub {
 		updatePackageSearchPath();
 	}
 
+    /// Disambiguate the `null` call
+	this(typeof(null) first, PackageSupplier[] additional_package_suppliers = null,
+			SkipPackageSuppliers skip_registry = SkipPackageSuppliers.none)
+    {
+        this(string.init, additional_package_suppliers, skip_registry);
+    }
+
 	unittest
 	{
-		scope (exit) environment.remove("DUB_REGISTRY");
 		auto dub = new Dub(".", null, SkipPackageSuppliers.configured);
 		assert(dub.m_packageSuppliers.length == 0);
-		environment["DUB_REGISTRY"] = "http://example.com/";
-		dub = new Dub(".", null, SkipPackageSuppliers.configured);
+
+        dub.m_ioSupplier.setEnv("DUB_REGISTRY", "http://example.com/");
+        dub = new Dub(".", null, SkipPackageSuppliers.configured);
 		assert(dub.m_packageSuppliers.length == 1);
-		environment["DUB_REGISTRY"] = "http://example.com/;http://foo.com/";
+
+        dub.m_ioSupplier.setEnv("DUB_REGISTRY", "http://example.com/;http://foo.com/");
 		dub = new Dub(".", null, SkipPackageSuppliers.configured);
 		assert(dub.m_packageSuppliers.length == 2);
+
 		dub = new Dub(".", [new RegistryPackageSupplier(URL("http://bar.com/"))], SkipPackageSuppliers.configured);
 		assert(dub.m_packageSuppliers.length == 3);
 	}
@@ -204,7 +224,7 @@ class Dub {
 
 		if (skip_registry < SkipPackageSuppliers.all)
 		{
-			ps ~= environment.get("DUB_REGISTRY", null)
+			ps ~= this.m_ioSupplier.getEnv("DUB_REGISTRY", null)
 				.splitter(";")
 				.map!(url => getRegistryPackageSupplier(url))
 				.array;
@@ -231,9 +251,7 @@ class Dub {
 
 	unittest
 	{
-		scope (exit) environment.remove("DUB_REGISTRY");
 		auto dub = new Dub(".", null, SkipPackageSuppliers.none);
-
 		dub.m_config = new DubConfig(Json(["skipRegistry": Json("none")]), null);
 		assert(dub.getPackageSuppliers(null).length == 1);
 
@@ -243,7 +261,7 @@ class Dub {
 		dub.m_config = new DubConfig(Json(["skipRegistry": Json("standard")]), null);
 		assert(dub.getPackageSuppliers(null).length == 0);
 
-		environment["DUB_REGISTRY"] = "http://example.com/";
+		dub.m_ioSupplier.setEnv("DUB_REGISTRY", "http://example.com/");
 		assert(dub.getPackageSuppliers(null).length == 1);
 	}
 
@@ -264,13 +282,13 @@ class Dub {
 	{
 		import std.file : tempDir;
 		version(Windows) {
-			m_dirs.systemSettings = NativePath(environment.get("ProgramData")) ~ "dub/";
-			immutable appDataDir = environment.get("APPDATA");
+			m_dirs.systemSettings = NativePath(this.m_ioSupplier.getEnv("ProgramData")) ~ "dub/";
+			immutable appDataDir = this.m_ioSupplier.getEnv("APPDATA");
 			m_dirs.userSettings = NativePath(appDataDir) ~ "dub/";
-			m_dirs.localRepository = NativePath(environment.get("LOCALAPPDATA", appDataDir)) ~ "dub";
+			m_dirs.localRepository = NativePath(this.m_ioSupplier.getEnv("LOCALAPPDATA", appDataDir)) ~ "dub";
 		} else version(Posix){
 			m_dirs.systemSettings = NativePath("/var/lib/dub/");
-			m_dirs.userSettings = NativePath(environment.get("HOME")) ~ ".dub/";
+			m_dirs.userSettings = NativePath(this.m_ioSupplier.getEnv("HOME")) ~ ".dub/";
 			if (!m_dirs.userSettings.absolute)
 				m_dirs.userSettings = NativePath(getcwd()) ~ m_dirs.userSettings;
 			m_dirs.localRepository = m_dirs.userSettings;
@@ -294,7 +312,7 @@ class Dub {
 
 	/** Returns the root path (usually the current working directory).
 	*/
-	@property NativePath rootPath() const { return m_rootPath; }
+	@property NativePath rootPath() const { return this.m_ioSupplier.rootPath; }
 	/// ditto
 	@property void rootPath(NativePath root_path)
 	{
@@ -1367,7 +1385,7 @@ class Dub {
 			return;
 		}
 
-		auto p = environment.get("DUBPATH");
+		auto p = m_ioSupplier.getEnv("DUBPATH", null);
 		NativePath[] paths;
 
 		version(Windows) enum pathsep = ";";
@@ -1384,7 +1402,7 @@ class Dub {
 		import std.range : front;
 
 		// Env takes precedence
-		if (auto envCompiler = environment.get("DC"))
+		if (auto envCompiler = m_ioSupplier.getEnv("DC", null))
 			m_defaultCompiler = envCompiler;
 		else
 			m_defaultCompiler = m_config.defaultCompiler.expandTilde;
@@ -1431,7 +1449,7 @@ class Dub {
 		// with the compiler name from their DUB config file, if specified.
 		if (m_defaultCompiler.length)
 			compilers = m_defaultCompiler ~ compilers;
-		auto paths = environment.get("PATH", "").splitter(sep).map!NativePath;
+		auto paths = this.m_ioSupplier.getEnv("PATH", "").splitter(sep).map!NativePath;
 		auto res = compilers.find!(bin => paths.canFind!(p => existsFile(p ~ (bin~exe))));
 		m_defaultCompiler = res.empty ? compilers[0] : res.front;
 	}
