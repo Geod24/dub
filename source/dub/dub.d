@@ -160,18 +160,18 @@ class Dub {
 	this(string root_path = ".", PackageSupplier[] additional_package_suppliers = null,
 			SkipPackageSuppliers skip_registry = SkipPackageSuppliers.none)
 	{
-		version (unittest)
-			auto iosup = new TestIOSupplier();
-		else
+		// version (unittest)
+		//	auto iosup = new TestIOSupplier();
+		// else
 			auto iosup = new FSIOSupplier();
 		this(iosup, additional_package_suppliers, skip_registry);
 	}
 
-    /// Ditto
-    this(IOSupplier ioSupplier, PackageSupplier[] additional_package_suppliers = null,
+	/// Ditto
+	this(IOSupplier ioSupplier, PackageSupplier[] additional_package_suppliers = null,
 			SkipPackageSuppliers skip_registry = SkipPackageSuppliers.none)
-    {
-        this.m_ioSupplier = ioSupplier;
+	{
+		this.m_ioSupplier = ioSupplier;
 
 		init(this.m_ioSupplier.rootPath);
 
@@ -185,23 +185,24 @@ class Dub {
 		updatePackageSearchPath();
 	}
 
-    /// Disambiguate the `null` call
+	/// Disambiguate the `null` call
 	this(typeof(null) first, PackageSupplier[] additional_package_suppliers = null,
 			SkipPackageSuppliers skip_registry = SkipPackageSuppliers.none)
-    {
-        this(string.init, additional_package_suppliers, skip_registry);
-    }
+	{
+		this(string.init, additional_package_suppliers, skip_registry);
+	}
 
 	unittest
 	{
 		auto dub = new Dub(".", null, SkipPackageSuppliers.configured);
 		assert(dub.m_packageSuppliers.length == 0);
 
-        dub.m_ioSupplier.setEnv("DUB_REGISTRY", "http://example.com/");
-        dub = new Dub(".", null, SkipPackageSuppliers.configured);
+		dub.m_ioSupplier.setEnv("DUB_REGISTRY", "http://example.com/");
+		scope (exit) dub.m_ioSupplier.setEnv("DUB_REGISTRY", null);
+		dub = new Dub(".", null, SkipPackageSuppliers.configured);
 		assert(dub.m_packageSuppliers.length == 1);
 
-        dub.m_ioSupplier.setEnv("DUB_REGISTRY", "http://example.com/;http://foo.com/");
+		dub.m_ioSupplier.setEnv("DUB_REGISTRY", "http://example.com/;http://foo.com/");
 		dub = new Dub(".", null, SkipPackageSuppliers.configured);
 		assert(dub.m_packageSuppliers.length == 2);
 
@@ -262,6 +263,7 @@ class Dub {
 		assert(dub.getPackageSuppliers(null).length == 0);
 
 		dub.m_ioSupplier.setEnv("DUB_REGISTRY", "http://example.com/");
+		scope(exit) dub.m_ioSupplier.setEnv("DUB_REGISTRY", null);
 		assert(dub.getPackageSuppliers(null).length == 1);
 	}
 
