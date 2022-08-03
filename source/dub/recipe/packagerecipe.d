@@ -30,6 +30,7 @@ import std.process : environment;
 	example, "packa:packb:packc" references a package named "packc" that is a
 	sub package of "packb", which in turn is a sub package of "packa".
 */
+deprecated
 string[] getSubPackagePath(string package_name) @safe pure
 {
 	return package_name.split(":");
@@ -40,6 +41,7 @@ string[] getSubPackagePath(string package_name) @safe pure
 
 	In case of a top level package, the qualified name is returned unmodified.
 */
+deprecated
 string getBasePackageName(string package_name) @safe pure
 {
 	return package_name.findSplit(":")[0];
@@ -51,9 +53,60 @@ string getBasePackageName(string package_name) @safe pure
 	This is the part of the package name excluding the base package
 	name. See also $(D getBasePackageName).
 */
+deprecated
 string getSubPackageName(string package_name) @safe pure
 {
 	return package_name.findSplit(":")[2];
+}
+
+/**
+ * Holds a package name, including its possible parent(s)
+ */
+public struct PackageName {
+    import std.ascii, std.format;
+
+	private string[] pkgs;
+
+	/// Instantiate and validate a name
+	public this (string value) @safe pure {
+		assert(value.length);
+
+		foreach (size_t idx, char c; value)
+			enforce(c.isLower || c.isDigit || c == '-' || c == '_' || c == ':',
+					format("Character '%c' at index %s is not allowed in package name (full name: '%s')",
+						   idx, c, value));
+
+		this.pkgs = value.split(':').array;
+		assert(this.pkgs.length >= 1);
+
+		version (none) {
+            // Disabled because it's used in the package recipe
+            // Allowing it means that a `PackageName` needs a context
+            enforce(this.pkgs[0].length,
+                    format("Package name '%s' is missing parent package name", value));
+        }
+		foreach (val; this.pkgs[1 .. $])
+			enforce(val.length, format("Package name '%s' should not contain empty subpackage(s)", value));
+	}
+
+	/// Writes a string representation to the sink
+	public void toString (scope void delegate (in char[]) @safe sink)
+		const scope @safe
+	{
+		sink(this.pkgs[0]);
+		foreach (part; this.pkgs[1 .. $]) {
+			sink(":");
+			sink(part);
+		}
+	}
+
+	/// Returns: A string representation
+	public string toString () const scope @safe
+	{
+		string result;
+		this.toString((in char[] data) { result ~= data; });
+		return result;
+	}
 }
 
 @safe unittest
