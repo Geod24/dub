@@ -131,3 +131,41 @@ dependency "b" version="*"
     assert(dub.project.getDependency("b", true), "Missing 'b' dependency");
     assert(dub.project.getDependency("no", true) is null, "Returned unexpected dependency");
 }
+
+// https://github.com/dlang/dub/issues/1217
+version (none) unittest
+{
+    // Project
+    const a = `name "a"
+dependency "b" version="*"
+configuration "unittest" {
+     dependency "c" version="==1.0.0"
+}`;
+    // Intermediate dependency
+    const b = `name "b"
+configuration "unittest" {
+    dependency "c" version="==2.0.0"
+}
+`;
+    // Leaf dependency
+    const c = `name "unit-threaded"`;
+
+    enableLogging();
+    scope(exit) disableLogging();
+
+    scope dub = new TestDub();
+    dub.createTestPackage(c, Version("1.0.0"), PackageFormat.sdl);
+    dub.createTestPackage(b, Version("1.0.0"), PackageFormat.sdl);
+    dub.loadPackage(dub.createTestPackage(a, Version("1.0.0"), PackageFormat.sdl));
+
+    dub.upgrade(UpgradeOptions.select);
+
+    // Check that dependencies have been populated
+    assert(dub.project.hasAllDependencies(), "project has missing dependencies");
+    auto bd = dub.project.getDependency("b", true);
+    assert(bd !is null, "dependencies have not been propagated");
+
+    // But not unittest-only dependency
+    auto cd = dub.project.getDependency("c", true);
+    assert(cd is null, "unittest-only dependency shouldn't be present!");
+}
