@@ -132,6 +132,7 @@ class Project {
 				return new SelectedVersions();
 			},
 			(Selections!1 s) => new SelectedVersions(s),
+            (Selections!2 s) => new SelectedVersions(),
 		);
 	}
 

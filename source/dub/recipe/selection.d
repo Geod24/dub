@@ -28,7 +28,7 @@ public alias Selected = Selections!1;
 public struct SelectionsFile
 {
     /// Private alias to avoid repetition
-    private alias DataType = SumType!(Selections!0, Selections!1);
+    private alias DataType = SumType!(Selections!0, Selections!1, Selections!2);
 
     /**
      * Get the `fileVersion` of this selection file
@@ -80,6 +80,8 @@ public struct SelectionsFile
         switch (vers.fileVersion) {
         case 1:
             return SelectionsFile(DataType(parser.parseAs!(Selections!1)));
+        case 2:
+            return SelectionsFile(DataType(parser.parseAs!(Selections!2)));
         default:
             return SelectionsFile(DataType(Selections!0(vers.fileVersion)));
         }
@@ -103,10 +105,24 @@ public struct Selections (ushort Version)
         /// The selected package and their matching versions
         public SelectedDependency[string] versions;
     }
+    else static if (Version == 2) {
+        /// The selected package and their matching versions
+        public ConfigurationSelections[string] configs;
+    }
     else
         static assert(false, "This version is not supported");
 }
 
+/**
+ * A per-configuration list of dependency
+ *
+ * Each `ConfigurationSelections` in `Selections` corresponds to
+ * a `configuration` entry in the recipe file.
+ */
+public struct ConfigurationSelections
+{
+    public SelectedDependency[string] versions;
+}
 
 /// Wrapper around `SelectedDependency` to do deserialization but still provide
 /// a `Dependency` object to client code.
@@ -207,4 +223,15 @@ unittest
     immutable string content = `{"fileVersion": 9999, "thisis": "notrecognized"}`;
     auto s = parseConfigString!SelectionsFile(content, "/dev/null");
     assert(s.fileVersion == 9999);
+}
+
+// Test reading version 2
+unittest
+{
+    import dub.internal.configy.Read : parseConfigString;
+
+    immutable string content = `{"fileVersion": 2, : "notrecognized"}`;
+    auto s = parseConfigString!SelectionsFile(content, "/dev/null");
+    assert(s.fileVersion == 9999);
+
 }
