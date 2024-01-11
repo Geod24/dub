@@ -202,7 +202,7 @@ unittest
 // Test reading an unsupported version
 unittest
 {
-    import dub.internal.configy.Read : parseConfigString, StrictMode;
+    import dub.internal.configy.Read : parseConfigString;
 
     immutable string content = `{"fileVersion": 9999, "thisis": "notrecognized"}`;
     auto s = parseConfigString!SelectionsFile(content, "/dev/null");
