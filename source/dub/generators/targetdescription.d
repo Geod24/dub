@@ -42,7 +42,7 @@ class TargetDescriptionGenerator : ProjectGenerator {
 
 			TargetDescription d;
 			d.rootPackage = ti.pack.name;
-			d.packages = ti.packages.map!(p => p.name).array;
+			d.packages = ti.packages.map!(p => p.name.toString()).array;
 			d.rootConfiguration = ti.config;
 			d.buildSettings = ti.buildSettings.dup;
 			const buildId = computeBuildID(d.buildSettings, ti.config, settings);

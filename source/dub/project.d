@@ -425,7 +425,7 @@ class Project {
 			logWarn(`DUB package names may only contain alphanumeric characters, `
 				~ `as well as '-' and '_'. %s`, nameSuggestion());
 		}
-		enforce(!m_rootPackage.name.canFind(' '), "Aborting due to the package name containing spaces.");
+		enforce(!m_rootPackage.name.toString().canFind(' '), "Aborting due to the package name containing spaces.");
 
 		foreach (d; m_rootPackage.getAllDependencies())
 			if (d.spec.isExactVersion && d.spec.version_.isBranch) {

@@ -790,17 +790,15 @@ class ProjectGenerator
  */
 package(dub) NativePath packageCache(NativePath cachePath, in Package pkg)
 {
-	import std.algorithm.searching : findSplit;
-
 	assert(pkg !is null);
 	assert(!cachePath.empty);
 
+	const name = pkg.name;
+	cachePath = cachePath ~ name.main.toString() ~ pkg.version_.toString();
 	// For subpackages
-	if (const names = pkg.name.findSplit(":"))
-		return cachePath ~ names[0] ~ pkg.version_.toString()
-			~ ("+" ~ names[2]);
-	// For regular packages
-	return cachePath ~ pkg.name ~ pkg.version_.toString();
+	if (name.sub.length)
+		cachePath ~= ("+" ~ name.sub);
+	return cachePath;
 }
 
 /**
@@ -1086,8 +1084,8 @@ void runBuildCommands(CommandType type, in string[] commands, in Package pack, i
 	auto env = makeCommandEnvironmentVariables(type, pack, proj, settings, build_settings, extraVars);
 	auto sub_commands = processVars(proj, pack, settings, commands, false, env);
 
-	auto depNames = proj.dependencies.map!((a) => a.name).array();
-	storeRecursiveInvokations(env, proj.rootPackage.name ~ depNames);
+	auto depNames = proj.dependencies.map!((a) => a.name.toString()).array();
+	storeRecursiveInvokations(env, proj.rootPackage.name.toString() ~ depNames);
 
 	runCommands(sub_commands, env.collapseEnv, pack.path().toString());
 }

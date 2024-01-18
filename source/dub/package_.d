@@ -201,10 +201,11 @@ class Package {
 		The qualified name includes any possible parent package if this package
 		is a sub package.
 	*/
-	@property string name()
+	@property PackageName name()
 	const {
-		if (m_parentPackage) return m_parentPackage.name ~ ":" ~ m_info.name;
-		else return m_info.name;
+		if (m_parentPackage)
+			return PackageName(m_parentPackage.name ~ ":" ~ m_info.name);
+		return PackageName(m_info.name);
 	}
 
 	/** Returns the directory in which the package resides.
