@@ -393,6 +393,8 @@ package class TestPackageManager : PackageManager
 			? PackageName(parent.name) : PackageName.init;
 
 		string text = stripUTF8Bom(cast(string)this.fs.readFile(recipe));
+		assert(text != "poison",
+			"Trying to access poisoned package: " ~ path.toNativeString());
 		auto content = parsePackageRecipe(text, recipe.toNativeString(),
 			parent_name, null, mode);
 
