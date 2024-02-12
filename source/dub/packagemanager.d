@@ -444,13 +444,16 @@ class PackageManager {
 		string gitReference = repo.ref_.chompPrefix("~");
 		NativePath destination = this.getPackagePath(PlacementLocation.user, name, repo.ref_);
 
-		foreach (p; getPackageIterator(name.toString())) {
-			if (p.path == destination) {
-				return p;
-			}
-		}
-
-		if (!this.gitClone(repo.remote, gitReference, destination))
+		// Iterate over all Packages loaded from `PlacementLocation.user`
+		// and the internal location.
+		// If we already loaded this Package, returns it, otherwise try to load it,
+		// and if that also fails, clone it.
+		if (this.existsDirectory(destination)) {
+			// It exists, check if we already loaded it.
+			foreach (p; getPackageIterator(name, false))
+				if (p.path == destination)
+					return p;
+		} else if (!this.gitClone(repo.remote, gitReference, destination))
 			return null;
 
 		Package result = this.load(destination);
@@ -604,9 +607,13 @@ class PackageManager {
 
 	/** Enables iteration over all known local packages.
 
+		Params:
+		  lazy_ = If `true`, only iterate on already loaded packages,
+		          skipping the cache scan. `false` by default.
+
 		Returns: A delegate suitable for use with `foreach` is returned.
 	*/
-	int delegate(int delegate(ref Package)) getPackageIterator()
+	int delegate(int delegate(ref Package)) getPackageIterator(bool lazy_)
 	{
 		// See `m_initialized` documentation
 		if (!this.m_initialized)
@@ -632,16 +639,24 @@ class PackageManager {
 		return &iterator;
 	}
 
+	/// Ditto
+	int delegate(int delegate(ref Package)) getPackageIterator() {
+		return this.getPackageIterator(false);
+	}
+
 	/** Enables iteration over all known local packages with a certain name.
 
 		Returns: A delegate suitable for use with `foreach` is returned.
 	*/
-	int delegate(int delegate(ref Package)) getPackageIterator(string name)
+	int delegate(int delegate(ref Package)) getPackageIterator(
+        in PackageName name, bool lazy_)
 	{
+		// Work around compiler bug (v2.106.0) when capturing `in` in dg.
+		const name_ = name.toString();
 		int iterator(int delegate(ref Package) del)
 		{
-			foreach (p; getPackageIterator())
-				if (p.name == name)
+			foreach (p; getPackageIterator(lazy_))
+				if (p.name == name_)
 					if (auto ret = del(p)) return ret;
 			return 0;
 		}
@@ -649,6 +664,10 @@ class PackageManager {
 		return &iterator;
 	}
 
+	/// Ditto
+	int delegate(int delegate(ref Package)) getPackageIterator(string name) {
+		return this.getPackageIterator(PackageName(name), false);
+	}
 
 	/** Returns a list of all package overrides for the given scope.
 	*/
