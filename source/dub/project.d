@@ -124,7 +124,8 @@ class Project {
 			},
 			(Selections!1 s) {
 				auto selectionsDir = r.absolutePath.parentPath;
-				return new SelectedVersions(s, selectionsDir.relativeTo(packPath));
+				// The explicit template argument works around a vibe-core bug
+				return new SelectedVersions(s, selectionsDir.relativeTo!NativePath(packPath));
 			},
 		);
 	}
