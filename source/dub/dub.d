@@ -361,10 +361,16 @@ class Dub {
 				.array;
 		}
 
-		if (skip < SkipPackageSuppliers.standard)
+		if (skip < SkipPackageSuppliers.standard) {
+            // TODO: This is a clutch for now - future work could pass the FS
+            // to IndexPackageSupplier
+            version (unittest) {} else {
+                ps ~= new IndexPackageSupplier("/home/mlang/.dub/index/");
+            }
 			ps ~= new FallbackPackageSupplier(
 				defaultRegistryURLs.map!(url => this.makePackageSupplier(url))
 				.array);
+		}
 
 		return ps;
 	}
@@ -1291,7 +1297,7 @@ class Dub {
 			try
 				results ~= tuple(ps.description, ps.searchPackages(query));
 			catch (Exception e) {
-				logWarn("Searching %s for '%s' failed: %s", ps.description, query, e.msg);
+				logWarn("Searching %s for '%s' failed: %s", ps.description, query, e);
 			}
 		}
 		return results.filter!(tup => tup[1].length);

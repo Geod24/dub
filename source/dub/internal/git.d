@@ -168,3 +168,19 @@ bool cloneRepository(string remote, string reference, string destination)
 
 	return true;
 }
+
+/**
+ * Upgrade an already checked out repository to the latest version.
+ */
+public bool updateRepository(string path, string reference, string remote = "origin") {
+	import std.process : spawnProcess, wait;
+
+	string[] args = [ "git", "-C", path, "fetch", remote ];
+	if (getLogLevel > LogLevel.diagnostic) args ~= "-q";
+	if (wait(spawnProcess(args)) != 0)
+        return false;
+
+	args = [ "git", "-C", path, "checkout", "--detach" ];
+	if (getLogLevel > LogLevel.diagnostic) args ~= "-q";
+    return (wait(spawnProcess(args ~ reference)) == 0);
+}
