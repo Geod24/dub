@@ -109,7 +109,7 @@ class Project {
 		import dub.internal.dyaml.stdsumtype;
 
 		auto lookupResult = mgr.readSelections(packPath);
-		if (lookupResult.isNull()) // no file, or parsing error (displayed to the user)
+		if (lookupResult.isNull()) // no applicable selections file
 			return new SelectedVersions();
 
 		auto r = lookupResult.get();
@@ -561,7 +561,10 @@ class Project {
 					(VersionRange range) {
 						// See `dub.recipe.selection : SelectedDependency.fromConfig`
 						assert(range.isExactVersion());
-						return m_packageManager.getPackage(dep.name, vspec.version_);
+						auto selected = m_packageManager.getPackage(dep.name, vspec.version_);
+						if (selected)
+							m_packageManager.getIntegrityTag(selected, m_selections.getIntegrityTag(basename));
+						return selected;
 					},
 				);
 			} else if (m_dependencies.canFind!(d => PackageName(d.name).main == basename)) {
@@ -1948,7 +1951,7 @@ public class SelectedVersions {
 	void selectVersion(string package_id, Version version_)
 	{
 		const name = PackageName(package_id);
-		return this.selectVersionInternal(name, Dependency(version_));
+		return this.selectVersion(name, version_);
 	}
 
 	/// Ditto
@@ -1956,6 +1959,10 @@ public class SelectedVersions {
 	{
 		auto dep = SelectedDependency(Dependency(version_), tag);
 		if (auto pdep = name.main.toString() in this.m_selections.versions) {
+			// Re-selecting an unchanged version must not erase its pin just
+			// because the package came from a legacy cache without metadata.
+			if (pdep.actual == dep.actual && tag == IntegrityTag.init)
+				dep.integrity = pdep.integrity;
 			if (*pdep == dep)
 				return;
 		}

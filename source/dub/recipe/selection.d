@@ -173,24 +173,12 @@ package(dub) struct SelectedDependency
 
     /// Serializes a selected version to JSON for `dub.selections.json`
     public Json toJsonDep () const {
-        version (none) {
-            // The following is not yet enabled, because we're currently only
-            // able to get an integrity tag value when the package is first
-            // downloaded. This is problematic as most of the time, we try
-            // to reuse packages, and most common use of `dub upgrade` would
-            // make the integrity tag flip between empty or not.
-            // However, with this code enabled, one may get an integrity tag
-            // written to their `dub.selections.json` under two conditions:
-            // 1) The package is not present on the file system;
-            // 2) The package is upgraded (e.g. `dub upgrade` would normally trigger);
-            if (this.integrity.value.length && this.actual.isExactVersion()) {
-                const vers = this.actual.version_();
-                Json result = Json.emptyObject;
-                result["version"] = Json(vers.toString());
-                result["integrity"] = Json(
-                    "%s-%s".format(this.integrity.algorithm, this.integrity.value));
-                return result;
-            }
+        if (this.integrity.value.length && this.actual.isExactVersion()) {
+            const vers = this.actual.version_();
+            Json result = Json.emptyObject;
+            result["version"] = Json(vers.toString());
+            result["integrity"] = Json(this.integrity.toString());
+            return result;
         }
         return this.actual.toJson(true);
     }
@@ -274,7 +262,18 @@ public struct IntegrityTag
 				"Expected digest to be base64 encoded, found non-base64 character '%s' at index '%s'"
 				.format(c, idx));
 		});
+		import std.base64 : Base64;
+		const decoded = Base64.decode(this.value);
+		const digestLength = this.algorithm == "sha256" ? 32 : this.algorithm == "sha384" ? 48 : 64;
+		enforce(decoded.length == digestLength && Base64.encode(decoded) == this.value,
+			"Expected a canonically base64-encoded digest");
 	}
+
+    /// Returns the SRI representation used in selections and cache metadata.
+    public string toString() const @safe pure
+    {
+        return this.algorithm ~ "-" ~ this.value;
+    }
 
     /// Internal constructor for `IntegrityTag.make`
     public this (string algorithm, string value) inout @safe pure nothrow @nogc {
@@ -354,6 +353,9 @@ unittest
     }
 
     assertThrown!Exception(IntegrityTag("sha256-abcdefghijklmnopqrstuvwxyz0123456789+/=="));
+    // The encoded length alone does not prove that it contains a 32-byte digest.
+    assertThrown!Exception(IntegrityTag("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="));
+    assertThrown!Exception(IntegrityTag("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
 }
 
 // Ensure we can read all type of dependencies

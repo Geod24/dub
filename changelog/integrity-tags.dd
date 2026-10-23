@@ -1,0 +1,17 @@
+Record and verify archive integrity tags in dependency selections
+
+DUB now records SHA-512 integrity tags for downloaded version dependencies in
+$(TT dub.selections.json), and checks them when those dependencies are downloaded
+again. Hashes are saved with cached packages so reusing a download or running
+$(TT dub upgrade) does not erase its integrity tag. SHA-256 and SHA-384 tags
+provided by other tools are also supported.
+
+Existing extracted caches remain trusted and usable without downloading them
+again. Entries without recorded hashes gain integrity information on subsequent
+downloads. These tags describe the original ZIP bytes; they do not detect later
+edits to extracted files. Path and Git dependencies do not acquire archive tags.
+
+Selecting a different version or explicitly upgrading a branch records its new
+hash. An unchanged release with a different archive fails verification, including
+when the archive is repackaged without changing its extracted contents. Malformed
+selections now report an error instead of silently discarding dependency pins.

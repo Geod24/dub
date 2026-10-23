@@ -888,7 +888,7 @@ class PackageManager {
 		// possibly wait for other dub instance
 		import core.time : seconds;
 		auto lock = lockFile(lockPath.toNativeString(), 30.seconds);
-		if (this.fs.existsFile(dstpath)) {
+		if (this.fs.existsDirectory(dstpath)) {
 			return this.getPackage(name, vers, dest);
 		}
 		return this.store_(data, dstpath, name, vers);
@@ -945,11 +945,15 @@ class PackageManager {
 
 		// extract & place
 		this.fs.mkdir(destination);
+		scope (failure) this.fs.removeDir(destination, true);
 		logDebug("Copying all files...");
 		int countFiles = 0;
 		foreach(ArchiveMember a; archive.directory) {
 			auto cleanedPath = getCleanedPath(a.name);
 			if(cleanedPath.empty) continue;
+			// Only DUB may supply download metadata, including when an archive
+			// contains a directory or symlink with the reserved name.
+			if (cleanedPath.bySegment.front.name == IntegrityFilename) continue;
 			auto dst_path = destination ~ cleanedPath;
 
 			logDebug("Creating %s", cleanedPath);
@@ -982,6 +986,8 @@ symlink_exit:
 
 		// overwrite dub.json (this one includes a version field)
 		auto pack = this.load(destination, NativePath.init, null, vers.toString());
+		enforce(pack.name == name.toString(),
+			"Downloaded package %s does not match expected name %s".format(pack.name, name));
 
 		if (pack.recipePath.head != defaultPackageFilename)
 			// Storeinfo saved a default file, this could be different to the file from the zip.
@@ -989,8 +995,57 @@ symlink_exit:
 		auto app = appender!string();
 		app.writePrettyJsonString(pack.recipe.toJson());
 		this.fs.writeFile(pack.recipePath.parentPath ~ defaultPackageFilename, app.data);
-		addPackages(this.m_internal.localPackages, pack);
+		Json metadata = Json.emptyObject;
+		metadata["fileVersion"] = 1;
+		metadata["name"] = name.toString();
+		metadata["version"] = vers.toString();
+		Json[] tags;
+		foreach (algorithm; ["sha256", "sha384", "sha512"])
+			tags ~= Json(IntegrityTag.make(data, algorithm).toString());
+		metadata["integrity"] = Json(tags);
+		auto metadataText = appender!string();
+		metadataText.writePrettyJsonString(metadata);
+		// Load subpackages before publishing any objects in the package index.
+		// A broken subpackage must not leave an entry for a failed installation.
+		Package[] packages;
+		addPackages(packages, pack);
+		this.fs.writeFile(destination ~ IntegrityFilename, metadataText.data);
+		this.m_internal.localPackages ~= packages;
 		return pack;
+	}
+
+	/// Kept inside the package so older DUB versions also remove it on replacement.
+	package(dub) enum IntegrityFilename = ".dub-integrity.json";
+
+	/** Returns the recorded archive hash, checking an existing selection if supplied.
+	 *
+	 * Extracted packages are trusted. Legacy caches without download metadata
+	 * remain usable and retain any existing pin, but cannot supply a new one.
+	 * This compares download provenance, not the current extracted file contents.
+	 */
+	package(dub) IntegrityTag getIntegrityTag(in Package pack,
+		in IntegrityTag expected = IntegrityTag.init)
+	{
+		if (!this.isManagedPackage(pack)) return expected;
+		auto base = pack.basePackage;
+		const path = base.path ~ IntegrityFilename;
+		if (!this.fs.existsFile(path)) return expected;
+		auto metadata = parseJsonString(this.fs.readText(path), path.toNativeString());
+		enforce(metadata["fileVersion"].get!int == 1 &&
+			metadata["name"].get!string == base.name &&
+			metadata["version"].get!string == base.version_.toString(),
+			"Invalid package integrity metadata at " ~ path.toNativeString());
+		const algorithm = expected == IntegrityTag.init ? "sha512" : expected.algorithm;
+		foreach (entry; metadata["integrity"].get!(Json[])) {
+			auto tag = IntegrityTag(entry.get!string);
+			if (tag.algorithm != algorithm) continue;
+			enforce(expected == IntegrityTag.init || tag == expected,
+				"Cached package %s@%s does not match integrity tag: expected %s, found %s (%s)"
+				.format(base.name, base.version_, expected, tag, path));
+			return tag;
+		}
+		throw new Exception("Missing %s digest in package integrity metadata at %s"
+			.format(algorithm, path));
 	}
 
 	/// Removes the given the package.
@@ -1002,28 +1057,21 @@ symlink_exit:
 
 		// remove package from repositories' list
 		bool found = false;
-		bool removeFrom(Package[] packs, in Package pack) {
-			auto packPos = countUntil!("a.path == b.path")(packs, pack);
-			if(packPos != -1) {
-				packs = .remove(packs, packPos);
-				return true;
-			}
-			return false;
+		bool removeFrom(ref Package[] packs, in Package pack) {
+			const previousLength = packs.length;
+			packs = packs.filter!(p => p.basePackage.path != pack.path).array;
+			return packs.length != previousLength;
 		}
-		foreach(repo; m_repositories) {
-			if (removeFrom(repo.fromPath, pack)) {
-				found = true;
-				break;
-			}
+		// A package can be present in several indexes after a cache scan.
+		// Remove all copies and their subpackages before replacing a branch.
+		foreach(ref repo; m_repositories) {
+			found |= removeFrom(repo.fromPath, pack);
 			// Maintain backward compatibility with pre v1.30.0 behavior,
 			// this is equivalent to remove-local
-			if (removeFrom(repo.localPackages, pack)) {
-				found = true;
-				break;
-			}
+			found |= removeFrom(repo.localPackages, pack);
 		}
-		if(!found)
-			found = removeFrom(this.m_internal.localPackages, pack);
+		found |= removeFrom(this.m_internal.localPackages, pack);
+		found |= removeFrom(this.m_internal.fromPath, pack);
 		enforce(found, "Cannot remove, package not found: '"~ pack.name ~"', path: " ~ to!string(pack.path));
 
 		logDebug("About to delete root folder for package '%s'.", pack.path);
@@ -1211,9 +1259,11 @@ symlink_exit:
 	 *                    which to load the selections file.
 	 *
 	 * Returns:
-	 *   Either `null` (if no selections file exists or parsing encountered an error),
+	 *   Either `null` (if no applicable selections file exists),
 	 *   or a `SelectionsFileLookupResult`. Note that the nested `SelectionsFile`
 	 *   might use an unsupported version (see `SelectionsFile` documentation).
+	 *
+	 * Throws: If the selections file cannot be parsed, including an invalid integrity tag.
 	 */
 	Nullable!SelectionsFileLookupResult readSelections(in NativePath absProjectPath)
 	in (absProjectPath.absolute) {
@@ -1229,15 +1279,14 @@ symlink_exit:
 		// TODO: Remove `StrictMode.Warn` after v1.40 release
 		// The default is to error, but as the previous parser wasn't
 		// complaining, we should first warn the user.
-		auto selections = wrapException(parseConfigString!SelectionsFile(
-			content, path.toNativeString(), StrictMode.Warn));
-		// Could not parse file
-		if (selections.isNull())
-			return N.init;
+		// A malformed pin must not silently discard the lockfile and allow
+		// dependency resolution to proceed without integrity checking.
+		auto selections = parseConfigString!SelectionsFile(
+			content, path.toNativeString(), StrictMode.Warn);
 		// Non-inheritable selections found
-		if (!path.startsWith(absProjectPath) && !selections.get().inheritable)
+		if (!path.startsWith(absProjectPath) && !selections.inheritable)
 			return N.init;
-		return N(SelectionsFileLookupResult(path, selections.get()));
+		return N(SelectionsFileLookupResult(path, selections));
 	}
 
 	/// Helper function to walk up the filesystem and find `dub.selections.json`

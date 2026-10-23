@@ -685,6 +685,9 @@ class Dub {
 					}
 				}
 
+				enforce(m_project.selections.getIntegrityTag(name) == IntegrityTag.init,
+					"Selected package %s %s with an integrity tag is unavailable; refusing to discard its pin."
+					.format(name, dep));
 				logWarn("Selected package %s %s doesn't exist. Using latest matching version instead.", p, dep);
 				m_project.selections.deselectVersion(name);
 			}
@@ -725,6 +728,7 @@ class Dub {
 		foreach (name, ver; versions) {
 			assert(!name.sub, "Resolved packages contain a sub package!?: " ~ name.toString());
 			Package pack;
+			IntegrityTag tag;
 			if (!ver.path.empty) {
 				try pack = m_packageManager.getOrLoadPackage(ver.path);
 				catch (Exception e) {
@@ -735,31 +739,34 @@ class Dub {
 				pack = m_packageManager.loadSCMPackage(name, ver.repository);
 			} else {
 				assert(ver.isExactVersion, "Resolved dependency is neither path, nor repository, nor exact version based!?");
+				const refreshBranch = ver.version_.isBranch && (options & UpgradeOptions.upgrade) != 0 &&
+					(packages_to_upgrade.empty || packages_to_upgrade.canFind(name.toString()));
+				if (!refreshBranch && m_project.selections.hasSelectedVersion(name) &&
+					m_project.selections.getSelectedVersion(name) == ver)
+					tag = m_project.selections.getIntegrityTag(name);
 				pack = m_packageManager.getPackage(name, ver.version_);
-				if (pack && m_packageManager.isManagedPackage(pack)
-					&& ver.version_.isBranch && (options & UpgradeOptions.upgrade) != 0)
+				if (pack && m_packageManager.isManagedPackage(pack) && refreshBranch)
 				{
 					// TODO: only re-install if there is actually a new commit available
 					logInfo("Re-installing branch based dependency %s %s", name, ver.toString());
 					m_packageManager.remove(pack);
 					pack = null;
 				}
+				if (pack)
+					tag = m_packageManager.getIntegrityTag(pack, tag);
 			}
 
 			FetchOptions fetchOpts;
 			fetchOpts |= (options & UpgradeOptions.preRelease) != 0 ? FetchOptions.usePrerelease : FetchOptions.none;
+			const fetched = pack is null;
 			if (!pack) {
-				auto tag = this.m_project.selections.getIntegrityTag(name);
-				const isInitTag = tag is typeof(tag).init;
-				this.fetch(name, ver.version_, fetchOpts, defaultPlacementLocation, tag);
-				if (isInitTag)
-					this.m_project.selections.selectVersion(name, ver.version_, tag);
+				pack = this.fetch(name, ver.version_, fetchOpts, defaultPlacementLocation, tag);
 			}
-			else if ((options & UpgradeOptions.select) && name.toString() != m_project.rootPackage.name) {
+			if (((options & UpgradeOptions.select) || fetched) && name.toString() != m_project.rootPackage.name) {
 				if (!ver.repository.empty) {
 					m_project.selections.selectVersion(name, ver.repository);
 				} else if (ver.path.empty) {
-					m_project.selections.selectVersion(name, ver.version_);
+					m_project.selections.selectVersion(name, ver.version_, tag);
 				} else {
 					NativePath relpath = ver.path;
 					if (relpath.absolute) relpath = relpath.relativeTo(m_project.rootPackage.path);
@@ -951,9 +958,8 @@ class Dub {
 	 *
 	 * This will query the configured PackageSuppliers for a package
 	 * matching the `range` specification, store it locally, and load
-	 * it in the `PackageManager`. Note that unlike the command line
-	 * version, this function is not idempotent and will remove an
-	 * existing package and re-download it.
+	 * it in the `PackageManager`. Already installed packages are reused,
+	 * except when explicitly refreshing a branch with `forceBranchUpgrade`.
 	 *
 	 * Params:
 	 *   name = Name of the package to retrieve. Subpackages will lead
@@ -969,6 +975,8 @@ class Dub {
 	 *         (in its non-`init` state), then it will be used to verify
 	 *         the content of the download. If it is left in its init state,
 	 *         it will be populated with a sha512 checksum post-download.
+	 *         For cached packages, recorded download metadata is used. Legacy
+	 *         caches are trusted and leave an unspecified tag in its init state.
 	 *   reason = Optionally, the reason for retriving this package.
 	 *            This is used only for logging.
 	 *
@@ -992,7 +1000,7 @@ class Dub {
 	{
 		IntegrityTag empty;
 		return this.fetch(name, VersionRange(vers, vers), options,
-			this.defaultPlacementLocation, empty, reason);
+			location, empty, reason);
 	}
 
 	/// Ditto
@@ -1000,7 +1008,7 @@ class Dub {
 		PlacementLocation location, ref IntegrityTag integrity)
 	{
 		return this.fetch(name, VersionRange(vers, vers), options,
-			this.defaultPlacementLocation, integrity, "getting selected version");
+			location, integrity, "getting selected version");
 	}
 
 	/// Ditto
@@ -1058,6 +1066,7 @@ class Dub {
 				// TODO: support git working trees by performing a "git pull" instead of this
 				logDiagnostic("Package %s %s (in %s packages) is already present with the latest version, skipping upgrade.",
 					name, ver, location.toString);
+				tag = m_packageManager.getIntegrityTag(existing, tag);
 				return existing;
 			} else {
 				logInfo("Removing", Color.yellow, "%s %s to prepare " ~
@@ -1078,17 +1087,20 @@ class Dub {
 		{
 			import std.zip : ZipException;
 
-			auto data = supplier.fetchPackage(name.main, range, (options & FetchOptions.usePrerelease) != 0); // Q: continue on fail?
-			if (tag !is IntegrityTag.init)
+			auto data = supplier.fetchPackage(name.main, VersionRange(ver, ver), (options & FetchOptions.usePrerelease) != 0);
+			if (tag != IntegrityTag.init)
 				enforce(tag.matches(data), ("Hash of downloaded package does " ~
-					"not match integrity tag for %s@%s - This can happen if " ~
-					"the version has been re-tagged").format(name.main, range));
-			else
-				tag = IntegrityTag.make(data);
+					"not match integrity tag for %s@%s: expected %s, found %s (%s). " ~
+					"This can happen if the version has been re-tagged.")
+					.format(name.main, ver, tag, IntegrityTag.make(data, tag.algorithm), supplier.description));
 			logDiagnostic("Placing to %s...", location.toString());
 
 			try {
-				return m_packageManager.store(data, location, name.main, ver);
+				auto pack = m_packageManager.store(data, location, name.main, ver);
+				// Populate the output only after extraction succeeded. Another
+				// process may have installed the package while we downloaded it.
+				tag = m_packageManager.getIntegrityTag(pack, tag);
+				return pack;
 			} catch (ZipException e) {
 				logInfo("Failed to extract zip archive for %s@%s...", name, ver);
 				// re-throw the exception at the end of the loop
@@ -2049,7 +2061,14 @@ private class DependencyVersionResolver : DependencyResolver!(Dependency, Depend
 				try {
 					FetchOptions fetchOpts;
 					fetchOpts |= prerelease ? FetchOptions.usePrerelease : FetchOptions.none;
-					m_dub.fetch(name.main, vers, fetchOpts, m_dub.defaultPlacementLocation, "need sub package description");
+					IntegrityTag tag;
+					const refreshBranch = vers.isBranch && (m_options & UpgradeOptions.upgrade) &&
+						!isFixedPackage(name.main);
+					if (!refreshBranch && m_selectedVersions.hasSelectedVersion(name.main) &&
+						m_selectedVersions.getSelectedVersion(name.main) == Dependency(vers))
+						tag = m_selectedVersions.getIntegrityTag(name.main);
+					m_dub.fetch(name.main, VersionRange(vers, vers), fetchOpts,
+						m_dub.defaultPlacementLocation, tag, "need sub package description");
 					auto ret = m_dub.m_packageManager.getBestPackage(name, vers);
 					if (!ret) {
 						logWarn("Package %s %s doesn't have a sub package %s", name.main, dep, name);

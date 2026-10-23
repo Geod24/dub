@@ -431,7 +431,7 @@ package class TestPackageManager : PackageManager
 		NativePath dstpath = this.getPackagePath(dest, name, vers.toString());
 		this.fs.mkdir(dstpath.parentPath());
 
-		if (this.fs.existsFile(dstpath))
+		if (this.fs.existsDirectory(dstpath))
 			return this.getPackage(name, vers, dest);
 		return this.store_(data, dstpath, name, vers);
 	}
@@ -556,7 +556,7 @@ public class MockPackageSupplier : PackageSupplier
 
         PkgData match;
         foreach (vers, pr; *ppkgs)
-            if ((!vers.isPreRelease || pre_release) &&
+            if ((!vers.isPreRelease || vers.isBranch || pre_release) &&
                 dep.matches(vers) &&
                 (!match.data.length || Version(match.recipe.version_) < vers)) {
                 match.recipe = pr.recipe;
