@@ -99,10 +99,17 @@ jobs:
         # We need to install GNU utils as the test-suite scripts expect it.
         # Without them we may get slightly different behavior in tests and hard-to-track failures
         brew install bash coreutils diffutils openssl@3
-        # Explicitly point the linker at Homebrew OpenSSL 3: vibe-d:tls still
-        # hardcodes Intel-only /usr/local paths, which do not exist on ARM64
-        # runners, so -lssl would otherwise resolve against the system LibreSSL
-        # (missing DTLSv1_* symbols, leading to undefined symbols at link time).
+        # vibe-stream:tls hardcodes `-L/usr/local/opt/openssl{,@1.1}/lib` in its
+        # lflags, which takes precedence over LIBRARY_PATH and does not exist
+        # on ARM64 runners. Repoint the unsuffixed path at Homebrew OpenSSL 3
+        # on both architectures so that the libssl actually linked matches the
+        # OpenSSL 3.x API the deimos bindings detect via PKG_CONFIG_PATH below
+        # (mixing 3.x bindings with an older libssl yields undefined symbols
+        # such as _ERR_new or _SSL_get1_peer_certificate, and linking against
+        # the system LibreSSL fails on DTLSv1_* symbols).
+        ls -l /usr/local/opt 2>/dev/null | grep -i ssl || true
+        sudo mkdir -p /usr/local/opt
+        sudo ln -sfn "$(brew --prefix openssl@3)" /usr/local/opt/openssl
         echo "LIBRARY_PATH=$(brew --prefix openssl@3)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> $GITHUB_ENV
         echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
         # Use $(brew --prefix) so this works on both Intel (/usr/local) and ARM (/opt/homebrew) runners
